@@ -1,0 +1,155 @@
+#include "udpsocketsenderh"
+
+#include <QJsonDocument>
+#include <QTimer>
+
+UdpSocketSender::UdpSocketSender(QString ActorId, QString ActorName, QString BrokerIp, qint16 BrokerPort, QObject *parent)
+    : QObject{parent}, brokerIp(BrokerIp), brokerPort(BrokerPort)
+{
+    actorCredentials["ActorIdA"] = ActorId;
+    actorCredentials["ActorNameA"] = ActorName;
+
+    socket = new QUdpSocket();
+    socket->bind(QHostAddress("0.0.0.0"), 0, QAbstractSocket::ReuseAddressHint);
+    connect(socket, &QUdpSocket::readyRead, this, &UdpSocketSender::MessageRecieved);
+
+    SendReHello();
+}
+
+void UdpSocketSender::SendReHello() {
+
+    QJsonObject obj;
+    obj["MessageType"] = "ReHello";
+    obj["ActorId"] = actorCredentials["ActorIdA"];
+
+    emit setDebugMessages("Creating New Socket connection with Broker");
+
+    QJsonDocument doc(obj);
+    socket->writeDatagram(doc.toJson(QJsonDocument::Compact), QHostAddress(brokerIp), brokerPort);
+}
+
+void UdpSocketSender::initiateConnection(QString ActorIdB, QString ActorSecretB) {
+
+    actorCredentials["ActorIdB"] = ActorIdB;
+    actorCredentials["ActorSecretB"] = ActorSecretB;
+
+    tries = 0;
+    SendActorConnectRequest();
+}
+
+void UdpSocketSender::SendActorConnectRequest() {
+
+    if(tries >= 0 && tries < 3) {
+
+        QJsonObject obj(actorCredentials);
+        obj["MessageType"] = "ActorConnectRequest";
+        obj["ActorId"] = actorCredentials["ActorIdA"];
+
+        emit setDebugMessages("Sending ActorConnectRequest for " + actorCredentials["ActorIdB"].toString());
+
+        QJsonDocument doc(obj);
+        tries++;
+        socket->writeDatagram(doc.toJson(QJsonDocument::Compact), QHostAddress(brokerIp), brokerPort);
+
+        QTimer::singleShot(3000, this, &UdpSocketSender::SendActorConnectRequest);
+    }
+}
+
+void UdpSocketSender::SendActorConnectDummy(QJsonObject actorData) {
+
+    if(tries >= 3 && tries < 6) {
+
+        actorCredentials["ActorPublicIpB"] = actorData["ActorPublicIp"];
+        actorCredentials["ActorPortB"] = actorData["ActorPort"];
+
+        QJsonObject obj;
+        obj["MessageType"] = "ActorConnectDummy";
+        obj["ActorId"] = actorCredentials["ActorIdA"];
+
+        emit setDebugMessages("Sending PeerConnectDummy to " + actorCredentials["ActorIdB"].toString() +
+                " > " + actorCredentials["ActorPublicIpB"].toString() +
+                ":" + actorCredentials["ActorPortA"].toString());
+
+        QJsonDocument doc(obj);
+        tries++;
+        socket->writeDatagram(doc.toJson(QJsonDocument::Compact),
+                              QHostAddress(actorCredentials["ActorPublicIpB"].toString()),
+                            actorCredentials["ActorPortB"].toInt());
+
+        QTimer::singleShot(3000, this, &UdpSocketSender::SendActorConnectDummy);
+    }
+}
+
+
+void UdpSocketSender::SendActorConnectAckowledge(QJsonObject actorData) {
+
+    if(tries >= 6 && tries < 9) {
+
+        actorCredentials["ActorNameB"] = actorData["ActorName"];
+
+        QJsonObject obj;
+        obj["MessageType"] = "ActorConnectAcknowledge";
+        obj["ActorId"] = actorCredentials["ActorIdA"];
+
+        emit setDebugMessages("Sending ActorConnectAcknowledge to " + actorCredentials["ActorIdB"].toString());
+
+        QJsonDocument doc(obj);
+        tries++;
+        socket->writeDatagram(doc.toJson(QJsonDocument::Compact),
+                              QHostAddress(actorCredentials["ActorPublicIpB"].toString()),
+                            actorCredentials["ActorPortB"].toInt());
+
+        QTimer::singleShot(3000, this, &UdpSocketSender::SendActorConnectAckowledge);
+    }
+}
+
+void UdpSocketSender::MessageRecieved() {
+
+    while ( socket->hasPendingDatagrams()) {
+
+        int size = socket->pendingDatagramSize();
+        char *data = new char[ size];
+        socket->readDatagram( data, size);
+
+        QString datastr( data);
+        datastr.truncate( datastr.lastIndexOf( '}') + 1);
+
+        auto json = ( QJsonDocument::fromJson( datastr.toUtf8() ) ).object();
+
+        delete[] data;
+
+        QString typeOfPacket = json["MessageType"].toString();
+
+        if( typeOfPacket  == "ReHelloAcknowledge") {
+
+            emit setDebugMessages("Received ReHello Acknowledge");
+        }
+        else if( typeOfPacket == "ActorConnectResponse") {
+
+            tries = 3;
+            emit setDebugMessages("Received ActorConnectResponse for "
+                                  + json["ActorPublicIpB"].toString() + ":" + QString::number(json["ActorPortB"].toInt()));
+
+            SendActorConnectDummy(json);
+        }
+        else if( typeOfPacket == "ActorConnectAccept") {
+
+            tries = 6;
+            emit setDebugMessages("Received ActorConnectAccept");
+
+            SendActorConnectAckowledge(json);
+        }
+        else if( typeOfPacket == "ActorConnectFinish") {
+
+            tries = 10;
+            emit setDebugMessages("Received ActorConnectFinish");
+
+            isConnected = true;
+            emit connectionFinished();
+        }
+        else if( typeOfPacket == "Data") {
+
+            emit setDebugMessages(json["dataType"].toString());
+        }
+    }
+}

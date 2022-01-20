@@ -1,0 +1,56 @@
+#ifndef UDPSOCKETSENDERH_H
+#define UDPSOCKETSENDERH_H
+
+#include <QObject>
+#include <QUdpSocket>
+#include <QJsonObject>
+
+class UdpSocketSender : public QObject
+{
+    Q_OBJECT
+public:
+    explicit UdpSocketSender(QString ActorId, QString ActorName = "User", QString BrokerIp = "localhost", qint16 BrokerPort = 3001, QObject *parent = nullptr);
+
+
+signals:
+
+    void setDebugMessages(const QString &message);
+
+    void connectionFinished();
+
+
+public slots:
+
+    void initiateConnection(QString ActorIdB, QString ActorSecretB);
+
+
+private slots:
+
+    void MessageRecieved();
+
+
+private:
+
+    // MEMBERS
+    QString brokerIp;
+    qint16 brokerPort;
+    QUdpSocket *socket;
+
+    QJsonObject actorCredentials;
+
+    qint8 tries;
+    bool isConnected = false;
+    bool isActive = false;
+
+
+    //METHODS
+    void SendReHello();
+
+    void SendActorConnectRequest();
+
+    void SendActorConnectDummy(QJsonObject actorData);
+
+    void SendActorConnectAckowledge(QJsonObject actorData);
+};
+
+#endif // UDPSOCKETSENDERH_H
